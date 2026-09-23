@@ -63,6 +63,7 @@
 | created_at | timestamptz | |
 
 - 唯一約束：`(feed_url)`、`(id, source_type)`（後者供 `episode_status` 的複合外鍵使用）
+- **feed_url 永久轉址處理（定案）**：10 個節目的 RSS 網址分屬 6 種託管平台（Libsyn、Simplecast、Megaphone、Anchor、Substack、Dwarkesh 自架的 Cloudflare Worker），網址由平台決定，節目換平台就會變。所以抓取時要允許並跟隨 redirect；若拿到永久轉址（HTTP 301 / 308），把轉址後的網址寫回 `feed_url`，避免之後每次抓都多跳一次，也避免舊網址哪天停止轉址就再也抓不到。暫時性轉址（302 / 307）只跟隨，不寫回。寫回時若新網址已被別的節目占用（違反 `(feed_url)` 唯一約束），不要硬寫，記錄下來讓人工判斷。
 
 ## 狀態追蹤層
 
