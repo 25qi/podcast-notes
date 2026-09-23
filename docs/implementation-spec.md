@@ -166,7 +166,8 @@ Healthchecks.io 的 dead-man's-switch 模式：pipeline 跑完就 ping 一個指
 - 同一節目 YouTube/Podcast 雙版本的去重複處理
 - 回填的具體分批方式（固定筆數／日期區間／由新到舊或由舊到新）
 - RDS 啟動失敗/逾時的重試與超時策略
-- Podcast 內容怎麼取得：10 個節目裡只有 Newcomer 的 RSS 帶逐字稿，其餘 9 個要決定怎麼拿（節目官網的逐字稿，或直接把音檔餵給 Gemini）
+- Podcast 內容怎麼取得（2026-09-23 更新）：實測 10 個節目的 RSS，只有 Newcomer 帶 `podcast:transcript` 標籤，且它最新一集有逐字稿的是 2026-05-29，6 月之後也沒有了——等於現在沒有任何節目能直接從 RSS 拿到逐字稿。方向定為「爬官網逐字稿為主、餵音檔給 Gemini 為備援」，但具體做法待探勘結果出來再定。
+- 逐字稿不在集數頁的情況（先記錄，之後再處理）：通用抽取假設「逐字稿在 RSS `<link>` 指向的那一頁」，但實際上可能放在別處——獨立的 /transcript 子頁、PDF、Apple Podcasts 或 Spotify 站內、第三方逐字稿服務、電子報的另一篇文章、或只有 YouTube 字幕。探勘時順便記錄遇到幾種，再決定值不值得處理。
 - YouTube 頻道怎麼追蹤新影片（`tracked_sources.feed_url` 對 YouTube 要放什麼）
 - `episode_status.updated_at` 怎麼維持正確（目前只有新增時會自動填，之後更新不會自動變，要用 trigger 或由程式每次更新時設定）
 

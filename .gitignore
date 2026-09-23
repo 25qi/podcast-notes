@@ -24,3 +24,6 @@ CLAUDE.md
 
 # 探索腳本產生的結果檔，隨時可重跑重生，不進版控
 out/
+
+# 個人筆記，不進版控
+docs/myThought.md
