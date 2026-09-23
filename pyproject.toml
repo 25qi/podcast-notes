@@ -1,0 +1,52 @@
+[project]
+name = "podcast-notes"
+version = "0.1.0"
+description = "AI note pipeline for YouTube channels and tech podcasts"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+    # Gemini 官方 SDK。注意不是舊的 google-generativeai（已停止維護），
+    # 新專案一律用 google-genai。
+    "google-genai>=1.0.0",
+    # Postgres driver。psycopg 3 系列，binary 版免編譯。
+    "psycopg[binary]>=3.2",
+    # Podcast RSS 解析
+    "feedparser>=6.0",
+    # HTTP client（抓 RSS / 逐字稿檔案用）
+    "httpx>=0.28",
+    # 設定集中管理，用環境變數載入並做型別驗證
+    "pydantic-settings>=2.7",
+    # AWS SDK：開關 RDS 執行個體
+    "boto3>=1.35",
+]
+
+[project.optional-dependencies]
+# Airflow 只有 Oracle Cloud 主機需要跑。本機裝它只是為了能 parse / 測試 DAG。
+# 拆成 optional 是為了讓本機安裝不被 Airflow 一大包依賴綁住。
+airflow = [
+    "apache-airflow==3.3.2",
+    "apache-airflow-providers-amazon>=9.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/podcast_notes"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
