@@ -126,15 +126,16 @@
 
 自架 Apache Airflow，架在 Oracle Cloud Always Free 的免費主機上（不用 Amazon MWAA，因為 MWAA Serverless 不支援 PythonOperator/BashOperator，跑不了自訂邏輯；也不用 GitHub Actions 排程，因為 GitHub 官方文件本身標註 schedule trigger 是 best-effort，不保證準時觸發）。部署用 Docker Compose（Airflow 官方主流做法），但只包這一層；`src/podcast_notes/` 的業務邏輯本身不依賴 Docker，可在任何裝了 Python + uv 的機器上直接跑。
 
-**DAG 任務切法：抓取、摘要、寫入切成三個獨立任務**（不合併成一個任務），原因：初期回填階段可能需要跑好幾輪抓取，切開方便針對單一步驟重跑或除錯，不用每次失敗就整條重來。
+**DAG 任務切法：抓取、抓內容、摘要、寫入切成四個獨立任務**（不合併成一個任務；抓內容於 2026-09-27 加入），原因：初期回填階段可能需要跑好幾輪抓取，切開方便針對單一步驟重跑或除錯，不用每次失敗就整條重來。
 
 任務順序：
 
 1. **等待 RDS 可連線**（Airflow Sensor，持續 poll 直到 RDS 啟動完成，不用 Lambda 15 分鐘執行上限的做法）
 2. **抓取**：讀 `tracked_sources` 裡啟用的節目，找出新集數寫進 episode_status；再查 episode_status 有哪些集數要處理（`pending`，加上卡住超時的 `processing`，`attempt_count` 已達 3 次的不撿），撿到的標成 `processing` 並記下 `processing_started_at`
-3. **摘要**：呼叫 Gemini Flash API 生成摘要與重點
-4. **寫入**：寫進 `notes` 表，並把 episode_status 更新為 `completed`（失敗則更新為 `failed`，記錄 `last_error`）
-5. **關閉 RDS**（不論前面成功或失敗都要執行，避免多花錢）
+3. **抓內容**（2026-09-27 新增）：對撿到的集數抓 Spotify 逐字稿存進資料庫；拿不到的標記改用音檔（見「內容取得層」）
+4. **摘要**：呼叫 Gemini Flash API 生成摘要與重點
+5. **寫入**：寫進 `notes` 表，並把 episode_status 更新為 `completed`（失敗則更新為 `failed`，記錄 `last_error`）
+6. **關閉 RDS**（不論前面成功或失敗都要執行，避免多花錢）
 
 RDS 啟動失敗或逾時的重試/超時策略：先不決定，之後再回來處理。
 
@@ -154,7 +155,9 @@ RDS 啟動失敗或逾時的重試/超時策略：先不決定，之後再回來
   app 擁有者需維持 Spotify Premium（2026-02 起的開發者規定）
 - **之後新增的 podcast 節目，到時候再個別確認**要不要走 Spotify（例如不在 Spotify 上、或沒有逐字稿的節目），
   不預設套用這條規則
-- 尚未決定：抓逐字稿這一步放在 DAG 的哪個任務（抓取或摘要）、瀏覽器要跑在本機 Mac 還是 Oracle 主機
+- DAG 位置（2026-09-27 定案）：獨立成「抓內容」任務，放在抓取與摘要之間。逐字稿先存進資料庫，
+  Gemini 失敗重試時不用重抓，也能單獨重跑抓內容。逐字稿存哪裡（新欄位或新表）尚未決定
+- 執行位置（2026-09-27 定案）：開發、回填都先在本機 Mac 執行；日常排程要不要搬到 Oracle，等 Oracle 主機規格定了再說
 
 ## 摘要層
 
@@ -190,7 +193,8 @@ Healthchecks.io 的 dead-man's-switch 模式：pipeline 跑完就 ping 一個指
 - 同一節目 YouTube/Podcast 雙版本的去重複處理
 - 回填的具體分批方式（固定筆數／日期區間／由新到舊或由舊到新）
 - RDS 啟動失敗/逾時的重試與超時策略
-- 抓 Spotify 逐字稿放在 DAG 的哪個任務、瀏覽器跑在本機 Mac 還是 Oracle 主機（見「內容取得層」）
+- 逐字稿存在哪裡：`episode_status` 加欄位，或另開一張表（見「內容取得層」）
+- 日常排程時瀏覽器要不要搬到 Oracle 主機（目前先全在 Mac，見「內容取得層」）
 - YouTube 頻道怎麼追蹤新影片（`tracked_sources.feed_url` 對 YouTube 要放什麼）
 
 ## 實作協作原則
