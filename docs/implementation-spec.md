@@ -94,6 +94,10 @@
 - 外鍵：`(source_id, source_type)` 對應 `tracked_sources(id, source_type)`，確保每一集屬於清單裡真實存在的節目，且類型一致
 - 卡住回收：`processing` 超過時限（暫定 2 小時）的集數，重置回 `pending`，避免 Airflow 中途掛掉時永遠卡住
 - 重試上限：`attempt_count` 達 3 次就不再自動撿，等人工重置
+- `attempt_count` 在「撿起來標成 `processing`」時就加 1（不是失敗時才加），程式中途整個掛掉也會被算到，不會無限重試
+- `updated_at`（2026-09-27 定案）：由程式在每一句 UPDATE 裡自己設 `updated_at = now()`，不用 DB trigger
+- Spotify 等待期（2026-09-27 定案）：走 Spotify 的節目，發布未滿 24 小時、又還沒比對到 Spotify 集數的，先不撿，
+  每輪重新比對；超過 24 小時仍比對不到才放行（之後退回音檔）。實作：`pipeline/fetch.py`
 
 ## 輸出層
 
@@ -188,7 +192,6 @@ Healthchecks.io 的 dead-man's-switch 模式：pipeline 跑完就 ping 一個指
 - RDS 啟動失敗/逾時的重試與超時策略
 - 抓 Spotify 逐字稿放在 DAG 的哪個任務、瀏覽器跑在本機 Mac 還是 Oracle 主機（見「內容取得層」）
 - YouTube 頻道怎麼追蹤新影片（`tracked_sources.feed_url` 對 YouTube 要放什麼）
-- `episode_status.updated_at` 怎麼維持正確（目前只有新增時會自動填，之後更新不會自動變，要用 trigger 或由程式每次更新時設定）
 
 ## 實作協作原則
 
