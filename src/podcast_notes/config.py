@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -64,10 +65,10 @@ def get_settings() -> Settings:
 
 
 class SpotifySettings(BaseSettings):
-    """Spotify 官方 Web API 的設定（把 RSS 集數對應到 Spotify episode id 用）。
+    """Spotify 相關設定：官方 Web API（集數比對）與登入的瀏覽器設定檔（抓逐字稿）。
 
     為什麼不放進 Settings：Settings 要求 DB、Gemini 等欄位一定要有，
-    但比對試跑（scripts/spotify_match_dry_run.py）只需要 Spotify，不該因為還沒建 RDS 就跑不了。
+    但 Spotify 的試跑腳本只需要 Spotify，不該因為還沒建 RDS 就跑不了。
     反過來，只跑 RSS 抓取的任務也不該因為沒填 Spotify 而啟動失敗。
     讀的是同一份 .env、同樣的 PN_ 前綴，只是分開驗證。
     """
@@ -81,6 +82,11 @@ class SpotifySettings(BaseSettings):
     # client credentials 沒有登入使用者，也就沒有「使用者所在國家」可推，所以明確指定一個。
     # 追蹤的都是美國節目，用 US。
     spotify_market: str = "US"
+    # 已登入 Spotify 的瀏覽器設定檔資料夾（Playwright 的 user_data_dir）。
+    # 裡面有登入 cookie，等同帳號憑證，已列入 .gitignore。
+    # 相對路徑是相對於執行時的工作目錄，平常都在專案根目錄執行。
+    # 登入過期時用 scripts/spotify_login.py 重新登入。
+    spotify_profile_dir: Path = Path(".browser-profile")
 
 
 @lru_cache(maxsize=1)

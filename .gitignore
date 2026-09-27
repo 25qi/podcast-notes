@@ -27,3 +27,6 @@ out/
 
 # 個人筆記，不進版控
 docs/myThought.md
+
+# 登入 Spotify 用的瀏覽器設定檔，裡面有登入 cookie，等同帳號憑證，不進版控
+.browser-profile/

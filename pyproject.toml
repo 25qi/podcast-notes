@@ -28,6 +28,12 @@ airflow = [
     "apache-airflow==3.3.2",
     "apache-airflow-providers-amazon>=9.0",
 ]
+# 抓 Spotify 逐字稿用（要開真的瀏覽器）。拆成 optional 的理由跟 airflow 一樣：
+# 不是每台機器都要跑這段，Oracle 主機能不能跑瀏覽器也還沒定。
+# 裝完還要下載瀏覽器本體：uv run playwright install chromium
+browser = [
+    "playwright>=1.50",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.8",

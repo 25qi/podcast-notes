@@ -1,6 +1,6 @@
 # Podcast 來源總覽
 
-最後更新：2026-09-24
+最後更新：2026-09-27
 
 這 10 個節目各是什麼狀況、每一集的內容要從哪裡取得。下面一張表就是全部結論。
 
@@ -26,6 +26,10 @@
 | **合計** | **48** | **48.2h** | **60 分** | | | | **8/10 有** | | |
 
 ## 結論
+
+> **2026-09-27 更新（第五輪，見文末）**：九月整月實抓，**57/57 集全部拿到 Spotify 逐字稿**，
+> 包括 Lenny's——它在第四輪時沒有 Transcript 按鈕，現在有了。下表與下方結論是第四輪的狀態，
+> 「Lenny's 改走 Spotify」尚未定案，等 Veky 決定。（九月集數也從 48 變成 57，因為月底又出了新集數。）
 
 **主力走 Spotify 逐字稿（45 集），Lenny's 走音檔（3 集），Dwarkesh 走官網。**
 
@@ -57,7 +61,11 @@ Spotify 幾乎替所有節目自動產生逐字稿。未登入完全拿不到（
 
 **無頭模式可行**，驗證過。所以回填時不用一直開著視窗。
 
-### 還沒解決的問題
+### RSS 集數怎麼對應到 Spotify episode id（2026-09-27 已解決）
+
+實作在 `src/podcast_notes/sources/spotify_catalog.py`：用官方 Web API 的 `/shows/{id}/episodes`
+列出集數，先比「正規化後標題完全相同」，比不到再比「日期差一天內 + 標題相似度 ≥ 0.8，且只有一個候選」。
+九月 57 集全部在第一輪（標題完全相同）配對成功。以下是當時的問題記錄：
 
 **怎麼把 RSS 的集數對應到 Spotify 的 episode id。** 這次測試是用「搜尋節目 → 取最新一集」，
 pipeline 需要的是「這一集的 guid → 對應的 Spotify episode id」。兩個方向：
@@ -184,10 +192,31 @@ under the Spotify Developer Terms and Developer Policy, and applicable law`。
 踩到的坑：Spotify 的 podcast 搜尋分頁是 `/search/<q>/podcastAndEpisodes`，不是 `/shows`。
 用錯網址會拿到「搜尋不到節目」，我第一版就是這樣全部誤判成沒有。
 
+## 第五輪（2026-09-27）：九月整月實抓
+
+用正式程式（`scripts/spotify_transcript_dry_run.py`）把九月 57 集全部跑一次：
+
+- **比對**：57/57 集對應到 Spotify episode id，全部是標題完全相同配上的
+- **逐字稿**：57/57 集拿到，0 集沒有、0 集失敗，連續抓完沒被擋、登入也沒失效
+- **Lenny's 現在有逐字稿了**（3 集，15,837～18,696 字）。第四輪時沒有 Transcript 按鈕，推測是 Spotify 後來補產生的
+- 字數合理性抽查：最短的 a16z 09-07 只有 1,522 字，但該集本來就只有 8 分鐘（約 188 字/分）
+
+實測到的新細節：
+
+- Transcript 是集數頁的分頁（`#transcript-tab`，role=tab），不是按鈕；它和 `#description-tab` 同時出現，
+  所以「Description 出現但 Transcript 沒出現」就代表這集沒有逐字稿，不用等逾時
+- 未登入時頁面有 `[data-testid="login-button"]`、沒有任何分頁，用它判斷登入失效
+- 逐字稿 JSON 的 `title` 區塊不只是講者（`Speaker 1`），也可能是 Spotify 自動切的章節標題，
+  所以輸出時標題獨立一行，不寫成「標題: 內文」
+- Spotify Web API 的集數清單裡真的會出現 `null`（官方文件說不會），要跳過
+- a16z 在 API 上顯示剛好 1000 集、最舊到 2016 年，可能是上限；回填只需 2025 年以後，不受影響
+- 2026-02 起 Spotify 開發者 app 的擁有者必須有 Premium
+
 ## 還沒查的
 
-- 每節目只取了最新 1～2 集，沒確認同一節目其他集是否都有逐字稿
-- 怎麼把 RSS 的 guid 對應到 Spotify 的 episode id（見上方「還沒解決的問題」）
-- Lenny's 唯一的可能來源：happyscribe 那 12 筆結果，內容還沒驗證
+- ~~每節目只取了最新 1～2 集~~ → 九月整月已驗證（第五輪）；2025 年的舊集數還沒驗證
+- ~~怎麼把 RSS 的 guid 對應到 Spotify 的 episode id~~ → 已解決（第五輪）
+- BG2 Pod、Lightcone 九月沒有新集數，沒被第五輪涵蓋
+- ~~Lenny's 唯一的可能來源：happyscribe~~ → Spotify 現在有了，happyscribe 不用再查
 - Spotify 登入 cookie 多久過期
 - spec 待定事項裡的其他來源：獨立 /transcript 子頁、PDF、YouTube 字幕
