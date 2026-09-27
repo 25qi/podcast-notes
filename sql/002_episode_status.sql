@@ -26,6 +26,12 @@ create table episode_status (
     -- 不然就得在摘要階段回頭重抓一次 RSS。
     source_url text not null,
 
+    -- 這一集在 Spotify 上的 episode id，抓 Spotify 逐字稿時要用。
+    -- 可空：節目不走 Spotify、或還沒比對到（比對失敗時留空，退回用音檔）。
+    -- 比對成功就存下來，重試時不用再呼叫一次 Spotify API 重新比對。
+    spotify_episode_id text
+        check (spotify_episode_id ~ '^[0-9A-Za-z]{22}$'),
+
     status text not null default 'pending'
         check (status in ('pending', 'processing', 'completed', 'failed')),
 
@@ -45,6 +51,10 @@ create table episode_status (
     updated_at timestamptz not null default now(),
 
     constraint uq_episode_status_source unique (source_type, source_item_id),
+
+    -- 兩集 RSS 不該對應到同一個 Spotify 集數；真的發生代表比對邏輯配錯了，
+    -- 讓資料庫直接擋下來，而不是默默把同一份逐字稿拿去寫兩篇筆記。
+    constraint uq_episode_status_spotify_episode_id unique (spotify_episode_id),
 
     -- 複合外鍵：每一集必須屬於追蹤清單裡真實存在的節目，
     -- 而且這裡的 source_type 必須跟該節目登記的 source_type 一致

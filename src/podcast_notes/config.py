@@ -14,14 +14,16 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_CONFIG = SettingsConfigDict(
+    env_prefix="PN_",
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",
+)
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="PN_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    model_config = _CONFIG
 
     # --- 資料庫 ---
     db_host: str
@@ -59,3 +61,28 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """快取成單例。Airflow 每個 task 是獨立 process，各自建一次就好。"""
     return Settings()  # type: ignore[call-arg]
+
+
+class SpotifySettings(BaseSettings):
+    """Spotify 官方 Web API 的設定（把 RSS 集數對應到 Spotify episode id 用）。
+
+    為什麼不放進 Settings：Settings 要求 DB、Gemini 等欄位一定要有，
+    但比對試跑（scripts/spotify_match_dry_run.py）只需要 Spotify，不該因為還沒建 RDS 就跑不了。
+    反過來，只跑 RSS 抓取的任務也不該因為沒填 Spotify 而啟動失敗。
+    讀的是同一份 .env、同樣的 PN_ 前綴，只是分開驗證。
+    """
+
+    model_config = _CONFIG
+
+    # developer.spotify.com/dashboard 建 app 取得
+    spotify_client_id: str
+    spotify_client_secret: str
+    # 查詢集數時帶的國家代碼（官方文件：只回傳在該地區可用的內容）。
+    # client credentials 沒有登入使用者，也就沒有「使用者所在國家」可推，所以明確指定一個。
+    # 追蹤的都是美國節目，用 US。
+    spotify_market: str = "US"
+
+
+@lru_cache(maxsize=1)
+def get_spotify_settings() -> SpotifySettings:
+    return SpotifySettings()  # type: ignore[call-arg]

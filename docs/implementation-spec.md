@@ -59,10 +59,11 @@
 | name | text | 節目或頻道名稱 |
 | host_name | text（可空） | 主持人，純顯示用 |
 | feed_url | text | 抓取任務用來找新集數的網址（podcast 為 RSS 網址），不可重複 |
+| spotify_show_id | text（可空） | Spotify 節目 id，用來比對 RSS 集數與 Spotify 集數；22 碼英數 CHECK、不可重複。只記事實，要不要走 Spotify 逐字稿另外決定 |
 | is_active | boolean | 是否啟用追蹤，預設 true；抓取任務只處理 true 的 |
 | created_at | timestamptz | |
 
-- 唯一約束：`(feed_url)`、`(id, source_type)`（後者供 `episode_status` 的複合外鍵使用）
+- 唯一約束：`(feed_url)`、`(spotify_show_id)`、`(id, source_type)`（最後一個供 `episode_status` 的複合外鍵使用）
 - **feed_url 永久轉址處理（定案）**：10 個節目的 RSS 網址分屬 6 種託管平台（Libsyn、Simplecast、Megaphone、Anchor、Substack、Dwarkesh 自架的 Cloudflare Worker），網址由平台決定，節目換平台就會變。所以抓取時要允許並跟隨 redirect；若拿到永久轉址（HTTP 301 / 308），把轉址後的網址寫回 `feed_url`，避免之後每次抓都多跳一次，也避免舊網址哪天停止轉址就再也抓不到。暫時性轉址（302 / 307）只跟隨，不寫回。寫回時若新網址已被別的節目占用（違反 `(feed_url)` 唯一約束），不要硬寫，記錄下來讓人工判斷。
 
 ## 狀態追蹤層
@@ -81,6 +82,7 @@
 | episode_title | text | 集數標題 |
 | published_at | timestamptz | 原始發布時間 |
 | source_url | text | 原始連結（podcast 為音檔網址），抓取階段就存，摘要任務直接讀 |
+| spotify_episode_id | text（可空） | 比對到的 Spotify 集數 id，比對失敗留空（退回音檔）；22 碼英數 CHECK、不可重複 |
 | status | text | `pending` / `processing` / `completed` / `failed`，預設 `pending`，CHECK 限制 |
 | processing_started_at | timestamptz（可空） | 標成 `processing` 的時間，用來回收卡死的集數 |
 | attempt_count | int | 重試次數，預設 0 |
@@ -88,7 +90,7 @@
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-- 唯一約束：`(source_type, source_item_id)`
+- 唯一約束：`(source_type, source_item_id)`、`(spotify_episode_id)`（後者防止比對配錯，兩集 RSS 對到同一個 Spotify 集數）
 - 外鍵：`(source_id, source_type)` 對應 `tracked_sources(id, source_type)`，確保每一集屬於清單裡真實存在的節目，且類型一致
 - 卡住回收：`processing` 超過時限（暫定 2 小時）的集數，重置回 `pending`，避免 Airflow 中途掛掉時永遠卡住
 - 重試上限：`attempt_count` 達 3 次就不再自動撿，等人工重置
