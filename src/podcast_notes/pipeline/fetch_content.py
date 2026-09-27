@@ -22,6 +22,7 @@ import psycopg
 from psycopg.rows import DictRow
 
 from podcast_notes.pipeline.fetch import SPOTIFY_GRACE_PERIOD
+from podcast_notes.pipeline.status import mark_failed, release_episode
 from podcast_notes.sources.spotify_transcript import SpotifyLoginRequired, Transcript
 
 log = logging.getLogger(__name__)
@@ -81,13 +82,13 @@ def fetch_contents(
         except SpotifyLoginRequired:
             # 登入失效不是這一集的錯，後面每一集也都會失敗：全部放回去，拋出去讓人重新登入
             for rest in episodes[i:]:
-                _release(conn, rest)
+                release_episode(conn, rest["id"])
             report.released += len(episodes) - i
             raise
         except Exception as e:  # noqa: BLE001  一集失敗不影響其他集
             log.exception("%s 抓內容失敗：%s", ep["show_name"], ep["source_item_id"])
             message = f"抓內容失敗：{type(e).__name__}: {e}"
-            _mark_failed(conn, ep, message)
+            mark_failed(conn, ep["id"], message)
             report.failed[ep["source_item_id"]] = message
             continue
 
@@ -96,7 +97,7 @@ def fetch_contents(
             report.transcripts += 1
         elif datetime.now(UTC) - ep["published_at"] < SPOTIFY_GRACE_PERIOD:
             # Spotify 有這集但逐字稿還沒產生，發布未滿 24 小時，等下一輪
-            _release(conn, ep)
+            release_episode(conn, ep["id"])
             report.released += 1
         else:
             _save_audio(conn, ep)
@@ -125,32 +126,4 @@ def _save_audio(conn: psycopg.Connection[DictRow], ep: dict) -> None:
             values (%s, %s, 'audio')
             """,
             (ep["source_type"], ep["source_item_id"]),
-        )
-
-
-def _release(conn: psycopg.Connection[DictRow], ep: dict) -> None:
-    """放回 pending，並把 claim 時加上去的那一次嘗試扣回來（這次不算這一集的錯）。"""
-    with conn.transaction():
-        conn.execute(
-            """
-            update episode_status
-            set status = 'pending',
-                processing_started_at = null,
-                attempt_count = attempt_count - 1,
-                updated_at = now()
-            where id = %s
-            """,
-            (ep["id"],),
-        )
-
-
-def _mark_failed(conn: psycopg.Connection[DictRow], ep: dict, message: str) -> None:
-    with conn.transaction():
-        conn.execute(
-            """
-            update episode_status
-            set status = 'failed', last_error = %s, updated_at = now()
-            where id = %s
-            """,
-            (message, ep["id"]),
         )

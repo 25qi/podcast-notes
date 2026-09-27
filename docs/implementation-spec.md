@@ -138,16 +138,17 @@
 
 自架 Apache Airflow，架在 Oracle Cloud Always Free 的免費主機上（不用 Amazon MWAA，因為 MWAA Serverless 不支援 PythonOperator/BashOperator，跑不了自訂邏輯；也不用 GitHub Actions 排程，因為 GitHub 官方文件本身標註 schedule trigger 是 best-effort，不保證準時觸發）。部署用 Docker Compose（Airflow 官方主流做法），但只包這一層；`src/podcast_notes/` 的業務邏輯本身不依賴 Docker，可在任何裝了 Python + uv 的機器上直接跑。
 
-**DAG 任務切法：抓取、抓內容、摘要、寫入切成四個獨立任務**（不合併成一個任務；抓內容於 2026-09-27 加入），原因：初期回填階段可能需要跑好幾輪抓取，切開方便針對單一步驟重跑或除錯，不用每次失敗就整條重來。
+**DAG 任務切法：抓取、抓內容、摘要＋寫入切成三個獨立任務**（抓內容於 2026-09-27 加入；摘要與寫入於 2026-09-28 合併——摘要結果若要跨任務傳遞得另找地方暫存，而寫 notes 與標 completed 本來就該在同一個交易，合併最單純），原因：初期回填階段可能需要跑好幾輪抓取，切開方便針對單一步驟重跑或除錯，不用每次失敗就整條重來。
 
 任務順序：
 
 1. **等待 RDS 可連線**（Airflow Sensor，持續 poll 直到 RDS 啟動完成，不用 Lambda 15 分鐘執行上限的做法）
 2. **抓取**：讀 `tracked_sources` 裡啟用的節目，找出新集數寫進 episode_status；再查 episode_status 有哪些集數要處理（`pending`，加上卡住超時的 `processing`，`attempt_count` 已達 3 次的不撿），撿到的標成 `processing` 並記下 `processing_started_at`
 3. **抓內容**（2026-09-27 新增）：對撿到的集數抓 Spotify 逐字稿存進資料庫；拿不到的標記改用音檔（見「內容取得層」）
-4. **摘要**：呼叫 Gemini Flash API 生成摘要與重點
-5. **寫入**：寫進 `notes` 表，並把 episode_status 更新為 `completed`（失敗則更新為 `failed`，記錄 `last_error`）
-6. **關閉 RDS**（不論前面成功或失敗都要執行，避免多花錢）
+4. **摘要＋寫入**（2026-09-28 合併）：呼叫 Gemini Flash 寫筆記，寫進 `notes` 表並把 episode_status 更新為 `completed`
+   （同一個交易）；失敗則更新為 `failed`，記錄 `last_error`；Gemini 當日額度用完（429）則把剩下的集數放回 `pending`
+   不算嘗試次數、停止。實作：`summarize/gemini.py`、`pipeline/summarize.py`
+5. **關閉 RDS**（不論前面成功或失敗都要執行，避免多花錢）
 
 RDS 啟動失敗或逾時的重試/超時策略：先不決定，之後再回來處理。
 
