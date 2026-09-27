@@ -94,6 +94,8 @@
 - 外鍵：`(source_id, source_type)` 對應 `tracked_sources(id, source_type)`，確保每一集屬於清單裡真實存在的節目，且類型一致
 - 卡住回收：`processing` 超過時限（暫定 2 小時）的集數，重置回 `pending`，避免 Airflow 中途掛掉時永遠卡住
 - 重試上限：`attempt_count` 達 3 次就不再自動撿，等人工重置
+- 失敗處理（2026-09-27 確認照字面）：任何一步處理失敗就標 `failed`、記 `last_error`，**不自動重試**，等人工重置。
+  自動重試只發生在「卡在 `processing` 超時」的集數（程式中途掛掉）
 - `attempt_count` 在「撿起來標成 `processing`」時就加 1（不是失敗時才加），程式中途整個掛掉也會被算到，不會無限重試
 - `updated_at`（2026-09-27 定案）：由程式在每一句 UPDATE 裡自己設 `updated_at = now()`，不用 DB trigger
 - Spotify 等待期（2026-09-27 定案）：走 Spotify 的節目，發布未滿 24 小時、又還沒比對到 Spotify 集數的，先不撿，
@@ -156,7 +158,12 @@ RDS 啟動失敗或逾時的重試/超時策略：先不決定，之後再回來
 - **之後新增的 podcast 節目，到時候再個別確認**要不要走 Spotify（例如不在 Spotify 上、或沒有逐字稿的節目），
   不預設套用這條規則
 - DAG 位置（2026-09-27 定案）：獨立成「抓內容」任務，放在抓取與摘要之間。逐字稿先存進資料庫，
-  Gemini 失敗重試時不用重抓，也能單獨重跑抓內容。逐字稿存哪裡（新欄位或新表）尚未決定
+  Gemini 失敗重試時不用重抓，也能單獨重跑抓內容。實作：`pipeline/fetch_content.py`
+- 逐字稿存放（2026-09-27 定案）：另開 `episode_contents` 表（DDL 見 `sql/005_episode_contents.sql`），
+  不放進 `episode_status`，維持那張表只存處理狀態的原則。每集一列：`content_source` 為
+  `spotify_transcript`（全文在 `transcript`）或 `audio`（摘要改餵 `episode_status.source_url` 的音檔）
+- 抓內容時「放回 pending、不算嘗試次數」的兩種情況（不是那一集的錯，不標 failed）：
+  有比對到 Spotify 但逐字稿還沒產生且發布未滿 24 小時；Spotify 登入失效（該批剩下的全部放回，任務報錯提醒重新登入）
 - 執行位置（2026-09-27 定案）：開發、回填都先在本機 Mac 執行；日常排程要不要搬到 Oracle，等 Oracle 主機規格定了再說
 
 ## 摘要層
@@ -201,7 +208,6 @@ Healthchecks.io 的 dead-man's-switch 模式：pipeline 跑完就 ping 一個指
 
 - 同一節目 YouTube/Podcast 雙版本的去重複處理
 - RDS 啟動失敗/逾時的重試與超時策略
-- 逐字稿存在哪裡：`episode_status` 加欄位，或另開一張表（見「內容取得層」）
 - 日常排程時瀏覽器要不要搬到 Oracle 主機（目前先全在 Mac，見「內容取得層」）
 - YouTube 頻道怎麼追蹤新影片（`tracked_sources.feed_url` 對 YouTube 要放什麼）
 

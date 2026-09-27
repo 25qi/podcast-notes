@@ -15,10 +15,12 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
+from _shared import FEED_A, FEED_B, SHOW_A
 
 from podcast_notes.config import Settings
 from podcast_notes.db import connect
@@ -139,3 +141,38 @@ def demo_table(pg_settings: Settings) -> Iterator[str]:
     yield "pn_test_demo"
     with connect(pg_settings) as conn:
         conn.execute("drop table if exists pn_test_demo")
+
+
+# --- 完整 schema 的測試資料庫（pipeline 測試用）-----------------------------------------------
+
+SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
+# 建表的 SQL，依序執行。004 是正式的追蹤清單 seed，測試不用，改放下面兩個假節目。
+SCHEMA_FILES = (
+    "001_tracked_sources.sql",
+    "002_episode_status.sql",
+    "003_notes.sql",
+    "005_episode_contents.sql",
+)
+
+
+@pytest.fixture
+def db(auto_docker_settings: Settings) -> Iterator[Settings]:
+    """每個測試一個乾淨的資料庫：砍掉 schema、照 sql/ 重建，放兩個節目（Show A、Show B）。
+
+    只用自動起的 Docker（auto_docker），不用手動模式：
+    砍掉整個 public schema 這種事，不能拿去碰開發者自己的資料庫。
+    """
+    with connect(auto_docker_settings) as conn:
+        conn.execute("drop schema public cascade")
+        conn.execute("create schema public")
+        for name in SCHEMA_FILES:
+            conn.execute((SQL_DIR / name).read_text(encoding="utf-8"))
+        conn.execute(
+            """
+            insert into tracked_sources (source_type, name, feed_url, spotify_show_id) values
+                ('podcast', 'Show A', %s, %s),
+                ('podcast', 'Show B', %s, null)
+            """,
+            (FEED_A, SHOW_A, FEED_B),
+        )
+    yield auto_docker_settings

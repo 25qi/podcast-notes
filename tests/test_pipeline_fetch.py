@@ -1,16 +1,14 @@
 """抓取任務對真的 Postgres 的行為。RSS 與 Spotify 都用假的，不連網。
 
-只用自動起的 Docker Postgres（auto_docker），不用手動模式：
-每個測試會把整個 public schema 砍掉重建，不能拿去碰開發者自己的資料庫。
+資料庫用 conftest 的 db fixture：每個測試一個乾淨的 schema，裡面有 Show A、Show B 兩個節目。
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 
 import pytest
+from _shared import FEED_A, FEED_B
 
 from podcast_notes.config import Settings
 from podcast_notes.db import connect
@@ -18,32 +16,8 @@ from podcast_notes.pipeline.fetch import claim_episodes, sync_sources
 from podcast_notes.sources.podcast import Episode, FeedResult
 from podcast_notes.sources.spotify_catalog import SpotifyEpisode
 
-SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
 SINCE = datetime(2025, 1, 1, tzinfo=UTC)
 NOW = datetime.now(UTC)
-
-SHOW_A = "A" * 22  # 走 Spotify 的節目
-FEED_A = "https://example.com/a.xml"
-FEED_B = "https://example.com/b.xml"  # 沒有 Spotify id 的節目
-
-
-@pytest.fixture
-def db(auto_docker_settings: Settings) -> Iterator[Settings]:
-    """每個測試一個乾淨的資料庫：砍掉 schema，照 sql/001~003 重建，放兩個節目。"""
-    with connect(auto_docker_settings) as conn:
-        conn.execute("drop schema public cascade")
-        conn.execute("create schema public")
-        for name in ("001_tracked_sources.sql", "002_episode_status.sql", "003_notes.sql"):
-            conn.execute((SQL_DIR / name).read_text(encoding="utf-8"))
-        conn.execute(
-            """
-            insert into tracked_sources (source_type, name, feed_url, spotify_show_id) values
-                ('podcast', 'Show A', %s, %s),
-                ('podcast', 'Show B', %s, null)
-            """,
-            (FEED_A, SHOW_A, FEED_B),
-        )
-    yield auto_docker_settings
 
 
 def _ep(guid: str, title: str, published: datetime, audio: str | None = "https://x/a.mp3"):
