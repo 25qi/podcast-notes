@@ -134,6 +134,24 @@
 
 RDS 啟動失敗或逾時的重試/超時策略：先不決定，之後再回來處理。
 
+## 內容取得層（2026-09-27 定案）
+
+**Podcast 一律走 Spotify 逐字稿，拿不到才退回音檔。**（證據見 `docs/podcast-sources.md`）
+
+- 九月整月實測 57/57 集都拿得到 Spotify 逐字稿，10 個節目全部適用，包括原本規劃走音檔的 Lenny's、
+  原本規劃走官網的 Dwarkesh。統一走 Spotify，程式只需要一條路徑
+- 流程：RSS 集數 → 用 Spotify 官方 Web API 列出該節目集數，以標題（必要時加日期）比對出 `spotify_episode_id`
+  → 已登入的 Playwright 瀏覽器開集數頁、攔截逐字稿 API 回應 → 整理成純文字
+  （實作：`sources/spotify_catalog.py`、`sources/spotify_transcript.py`）
+- 退回音檔的情況：比對不到 Spotify 集數、或該集沒有逐字稿 → 餵音檔給 Gemini
+- 不退回音檔、而是記成失敗等重試的情況：網路逾時、Spotify 改版導致抓取失敗；
+  登入失效則整批停止，人工執行 `scripts/spotify_login.py` 重新登入
+- 風險：逐字稿依賴 Spotify 非公開 API 與登入狀態，改版就會壞；比對用的是官方 Web API，
+  app 擁有者需維持 Spotify Premium（2026-02 起的開發者規定）
+- **之後新增的 podcast 節目，到時候再個別確認**要不要走 Spotify（例如不在 Spotify 上、或沒有逐字稿的節目），
+  不預設套用這條規則
+- 尚未決定：抓逐字稿這一步放在 DAG 的哪個任務（抓取或摘要）、瀏覽器要跑在本機 Mac 還是 Oracle 主機
+
 ## 摘要層
 
 Google Gemini API，Flash 版本（Pro 已從免費方案下架）。不用小型專門摘要模型（上下文長度不夠放完整逐字稿），也不在 Oracle 主機上自架本地模型（運算資源不足、會跟 Airflow 本身搶資源，且 Gemini Flash 免費額度已經夠用，自架沒有省到錢）。
@@ -168,8 +186,7 @@ Healthchecks.io 的 dead-man's-switch 模式：pipeline 跑完就 ping 一個指
 - 同一節目 YouTube/Podcast 雙版本的去重複處理
 - 回填的具體分批方式（固定筆數／日期區間／由新到舊或由舊到新）
 - RDS 啟動失敗/逾時的重試與超時策略
-- Podcast 內容怎麼取得（2026-09-23 更新）：實測 10 個節目的 RSS，只有 Newcomer 帶 `podcast:transcript` 標籤，且它最新一集有逐字稿的是 2026-05-29，6 月之後也沒有了——等於現在沒有任何節目能直接從 RSS 拿到逐字稿。方向定為「爬官網逐字稿為主、餵音檔給 Gemini 為備援」，但具體做法待探勘結果出來再定。
-- 逐字稿不在集數頁的情況（先記錄，之後再處理）：通用抽取假設「逐字稿在 RSS `<link>` 指向的那一頁」，但實際上可能放在別處——獨立的 /transcript 子頁、PDF、Apple Podcasts 或 Spotify 站內、第三方逐字稿服務、電子報的另一篇文章、或只有 YouTube 字幕。探勘時順便記錄遇到幾種，再決定值不值得處理。
+- 抓 Spotify 逐字稿放在 DAG 的哪個任務、瀏覽器跑在本機 Mac 還是 Oracle 主機（見「內容取得層」）
 - YouTube 頻道怎麼追蹤新影片（`tracked_sources.feed_url` 對 YouTube 要放什麼）
 - `episode_status.updated_at` 怎麼維持正確（目前只有新增時會自動填，之後更新不會自動變，要用 trigger 或由程式每次更新時設定）
 
