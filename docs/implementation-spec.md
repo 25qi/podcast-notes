@@ -116,13 +116,23 @@
 | episode_title | text | |
 | published_at | timestamptz | |
 | source_url | text | 原始連結 |
-| summary | text | Gemini 生成的摘要內容 |
-| key_points | jsonb | 重點條列，CHECK 限制必須是陣列 |
+| one_liner | text | 一句話總結 |
+| guest_background | text（可空） | 來賓與背景，只寫節目裡提到的；沒來賓的集數為空 |
+| summary | text | 摘要（2～3 段） |
+| key_points | jsonb | 重點條列（6～8 點），CHECK 限制必須是陣列 |
+| people | jsonb | 提到的人物 `[{name, context}]` |
+| companies | jsonb | 提到的公司 `[{name, context}]` |
+| quotes | jsonb | 金句 `[{original, translation}]`（英文原文＋中文翻譯） |
+| follow_up_questions | jsonb | 值得延伸思考的問題（1～2 個） |
+| content_source | text | 根據 `spotify_transcript` 或 `audio` 寫的 |
 | model_name | text | 產生這篇摘要的模型名稱（設定用的是會自動指向新版的別名，記下來才能追查品質變化） |
 | created_at | timestamptz | |
 
 - 唯一約束：`(source_type, source_item_id)`
 - 外鍵：`(source_type, source_item_id)` 對應 `episode_status`，筆記必須對得上真實存在的集數，且已有筆記的集數不能被刪除
+- 筆記格式（2026-09-28 Veky 選定）：用同一集試產「繁中精簡／繁中詳細結構化／英文精簡」三種，選繁中詳細結構化。
+  繁體中文、專有名詞保留英文。試產時發現詳細版會補充逐字稿沒講的外部知識（例如「Arm 驅動 99% 智慧型手機」），
+  所以 prompt 明確要求只根據節目內容
 
 ## 排程／執行層
 
@@ -210,9 +220,3 @@ Healthchecks.io 的 dead-man's-switch 模式：pipeline 跑完就 ping 一個指
 - RDS 啟動失敗/逾時的重試與超時策略
 - 日常排程時瀏覽器要不要搬到 Oracle 主機（目前先全在 Mac，見「內容取得層」）
 - YouTube 頻道怎麼追蹤新影片（`tracked_sources.feed_url` 對 YouTube 要放什麼）
-
-## 實作協作原則
-
-（2026-09-28 調整：原本「每個決定點都要 Veky 確認後才繼續」切得太細，已取消。）
-
-一般實作與設計細節（包括下方待定清單裡的小事項）由 Claude Code 依常理決定並直接實作，做完在回報裡簡短說明選了什麼、為什麼，Veky 不同意再改。只有會花錢、難以復原（例如已上線資料庫的變更）、或明顯改變產品方向的決定才先問。
