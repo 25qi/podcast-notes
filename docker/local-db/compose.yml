@@ -1,0 +1,32 @@
+# 本機長期保存資料的 Postgres：回填期間先存在 Mac，之後再搬到 AWS RDS（2026-09-28 決定）。
+#
+# 用法（在專案根目錄執行）：
+#   docker compose -f docker/local-db/compose.yml --env-file .env up -d     # 啟動
+#   docker compose -f docker/local-db/compose.yml --env-file .env down      # 停止（資料保留）
+#   uv run python scripts/init_db.py                                        # 建表 / 補跑新的 SQL
+#
+# 帳號密碼讀 .env 的 PN_DB_*，跟程式用同一組，不另外維護。
+
+services:
+  postgres:
+    # 版本跟測試用的一致（tests/conftest.py）
+    image: postgres:16-alpine
+    container_name: podcast-notes-db
+    environment:
+      POSTGRES_DB: ${PN_DB_NAME:?.env 缺 PN_DB_NAME}
+      POSTGRES_USER: ${PN_DB_USER:?.env 缺 PN_DB_USER}
+      POSTGRES_PASSWORD: ${PN_DB_PASSWORD:?.env 缺 PN_DB_PASSWORD}
+    ports:
+      # 只開給本機（127.0.0.1），區網其他電腦連不到。
+      # 用 5433 而不是預設的 5432，避免跟其他 Postgres 撞號。
+      - "127.0.0.1:${PN_DB_PORT:-5433}:5432"
+    volumes:
+      # named volume：container 刪掉重建，資料都還在。
+      # 真的要清空資料才用：docker volume rm podcast-notes-pgdata
+      - pgdata:/var/lib/postgresql/data
+    # Docker Desktop 開著就自動啟動（例如重開機後）
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    name: podcast-notes-pgdata

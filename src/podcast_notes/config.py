@@ -56,6 +56,8 @@ class Settings(BaseSettings):
 
     # --- 回填 ---
     backfill_since: date = Field(default=date(2025, 1, 1))
+    # 每次執行最多撿幾集。Gemini 免費方案每天 20 次請求（RPD），一集用一次（spec「歷史回填」）。
+    daily_episode_limit: int = 20
 
 
 @lru_cache(maxsize=1)

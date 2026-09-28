@@ -15,14 +15,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Protocol
 
 import psycopg
 from psycopg.rows import DictRow
 
 from podcast_notes.sources.podcast import Episode, FeedResult, fetch_feed
-from podcast_notes.sources.spotify_catalog import SpotifyEpisode, match_episodes
+from podcast_notes.sources.spotify_catalog import (
+    SpotifyEpisode,
+    SpotifyRateLimited,
+    match_episodes,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +45,9 @@ SPOTIFY_GRACE_PERIOD = timedelta(hours=24)
 class ShowCatalog(Protocol):
     """sync_sources 需要的 Spotify 功能。正式跑用 SpotifyCatalog，測試可以換成假的。"""
 
-    def list_show_episodes(self, show_id: str) -> list[SpotifyEpisode]: ...
+    def list_show_episodes(
+        self, show_id: str, *, stop_before: date | None = None
+    ) -> list[SpotifyEpisode]: ...
 
 
 @dataclass(frozen=True)
@@ -95,15 +101,33 @@ def sync_sources(
     # savepoint，離開時不會真的 commit，全部要等最外層才一起存（psycopg 官方文件的行為），
     # 中途掛掉的話前面節目的資料就白寫了。
     conn.commit()
+    rate_limited = False
     for source in sources:
+        # RSS 寫入和 Spotify 比對分成兩個交易：
+        # 比對失敗（例如 Spotify 限流）不該把已經寫好的新集數也復原
         try:
             with conn.transaction():
                 report.inserted[source.name] = _sync_feed(conn, source, since, feed_fetcher)
-                if catalog is not None and source.spotify_show_id:
-                    report.matched[source.name] = _match_spotify(conn, source, catalog)
         except Exception as e:  # noqa: BLE001  一個節目失敗不該拖垮其他節目
-            log.exception("節目 %s 同步失敗", source.name)
+            log.exception("節目 %s 同步 RSS 失敗", source.name)
             report.errors[source.name] = f"{type(e).__name__}: {e}"
+            continue
+
+        if catalog is None or not source.spotify_show_id or rate_limited:
+            continue
+        try:
+            with conn.transaction():
+                report.matched[source.name] = _match_spotify(conn, source, catalog)
+        except SpotifyRateLimited as e:
+            # 被要求等很久：後面的節目也一定會被擋，這一輪就不再比對了。
+            # 沒比對到的集數 spotify_checked_at 維持 null，
+            # claim 不會把它們誤當成「Spotify 上沒有」。
+            log.warning("Spotify 限流，這一輪停止比對：%s", e)
+            report.errors[source.name] = f"Spotify 比對：{e}"
+            rate_limited = True
+        except Exception as e:  # noqa: BLE001
+            log.exception("節目 %s 比對 Spotify 失敗", source.name)
+            report.errors[source.name] = f"Spotify 比對：{type(e).__name__}: {e}"
     return report
 
 
@@ -172,6 +196,9 @@ def _match_spotify(conn: psycopg.Connection[DictRow], source: Source, catalog: S
     if not rows:
         return 0  # 都比對過了，就不用打 Spotify API
 
+    # 只需要翻到比「最舊的待比對集數」再舊一點的地方（多留兩天緩衝，兩邊日期可能差一天）
+    oldest = min(r["published_at"] for r in rows).date() - timedelta(days=2)
+
     rss = [
         Episode(
             source_item_id=r["source_item_id"],
@@ -182,7 +209,18 @@ def _match_spotify(conn: psycopg.Connection[DictRow], source: Source, catalog: S
         )
         for r in rows
     ]
-    matches = match_episodes(rss, catalog.list_show_episodes(source.spotify_show_id))
+    matches = match_episodes(
+        rss, catalog.list_show_episodes(source.spotify_show_id, stop_before=oldest)
+    )
+    # 這批集數都「真的比對過」了（不管有沒有比到），記下時間。claim 靠它判斷能不能改用音檔。
+    conn.execute(
+        """
+        update episode_status
+        set spotify_checked_at = now(), updated_at = now()
+        where source_id = %s and status = 'pending' and spotify_episode_id is null
+        """,
+        (source.id,),
+    )
 
     written = 0
     for guid, spotify_id in matches.items():
@@ -212,7 +250,8 @@ def claim_episodes(
     撿的條件（spec）：
     - pending，或卡在 processing 超過 STUCK_TIMEOUT 的（上一輪中途掛掉）
     - attempt_count 還沒達到 MAX_ATTEMPTS
-    - 走 Spotify 的節目：已經比對到 Spotify 集數，或發布已超過 SPOTIFY_GRACE_PERIOD
+    - 走 Spotify 的節目：已經比對到 Spotify 集數，或「比對過確定找不到」且發布已超過
+      SPOTIFY_GRACE_PERIOD。還沒比對過的（例如被 Spotify 限流）一律不撿，不然會被誤改用音檔
 
     attempt_count 在撿起來的這一刻就加 1，而不是失敗時才加：
     如果程式中途整個掛掉，根本沒機會執行「失敗時加 1」，那一集就會無限重試。
@@ -238,7 +277,8 @@ def claim_episodes(
               and (
                   t.spotify_show_id is null
                   or e.spotify_episode_id is not null
-                  or e.published_at < now() - %(grace)s
+                  or (e.spotify_checked_at is not null
+                      and e.published_at < now() - %(grace)s)
               )
             order by e.published_at {order}
             limit %(limit)s

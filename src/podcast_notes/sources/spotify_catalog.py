@@ -34,6 +34,14 @@ _PAGE_SIZE = 50
 # 被限流（HTTP 429）時最多重試幾次。Spotify 會在 Retry-After 標頭告訴你要等幾秒。
 _MAX_RATE_LIMIT_RETRIES = 3
 
+# Retry-After 超過這個秒數就不等了，直接拋 SpotifyRateLimited。
+# 2026-09-28 實測：第一次回填連續翻了幾十頁，Spotify 回 Retry-After: 15078（約 4 小時），
+# 程式照著睡 4 小時，看起來就像卡死。等這麼久不如這輪先跳過比對，下一輪再來。
+_MAX_RETRY_AFTER_SECONDS = 60
+
+# 翻頁之間停一下，放慢打 API 的速度。開發模式的限流額度官方沒公布，保守一點。
+_PAGE_INTERVAL_SECONDS = 1.0
+
 # 日期不同但標題相近時，相似度要達到多少才算同一集。
 # 0.8 是保守值：同一集常見的差異只是多了節目名前綴或標點不同，相似度通常 > 0.9；
 # 同一天發的兩集標題完全不同，相似度通常 < 0.5。寧可比不到（退回音檔），也不要配錯。
@@ -52,6 +60,14 @@ class SpotifyEpisode:
     name: str
     release_date: date | None
     """精確到「日」才有值；Spotify 對老集數有時只給到年或月，那種就當沒日期。"""
+
+
+class SpotifyRateLimited(Exception):
+    """Spotify 要求等太久（Retry-After 超過 _MAX_RETRY_AFTER_SECONDS）。這一輪先放棄比對。"""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(f"Spotify 限流，要求等 {retry_after} 秒")
+        self.retry_after = retry_after
 
 
 class SpotifyCatalog:
@@ -85,8 +101,15 @@ class SpotifyCatalog:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def list_show_episodes(self, show_id: str) -> list[SpotifyEpisode]:
-        """列出一個節目在 Spotify 上的所有集數（官方回傳順序：由新到舊）。"""
+    def list_show_episodes(
+        self, show_id: str, *, stop_before: date | None = None
+    ) -> list[SpotifyEpisode]:
+        """列出一個節目在 Spotify 上的集數（實測回傳順序：由新到舊）。
+
+        stop_before：翻到某一頁的最後一集比這個日期還舊，就不再往下翻。
+        平常每天只需要比對最新幾集，不用每次把 1,500 集的節目整個翻完（20VC 要 31 頁）；
+        不給就全部列出（第一次回填時）。
+        """
         episodes: list[SpotifyEpisode] = []
         url: str | None = f"{_API_BASE}/shows/{show_id}/episodes"
         params: dict[str, str | int] | None = {"limit": _PAGE_SIZE, "market": self._market}
@@ -94,10 +117,16 @@ class SpotifyCatalog:
             data = self._get(url, params)
             # 官方文件說 items 不會是 null，但實務上下架的集數會以 null 出現在清單裡，
             # 跳過就好，不要讓整個節目因為一集壞資料而失敗。
-            episodes.extend(_to_spotify_episode(item) for item in data["items"] if item)
+            page = [_to_spotify_episode(item) for item in data["items"] if item]
+            episodes.extend(page)
             # next 是完整網址（已經帶好 offset、limit、market），直接跟著走，參數不用再帶。
             url = data.get("next")
             params = None
+            oldest = next((ep.release_date for ep in reversed(page) if ep.release_date), None)
+            if stop_before and oldest and oldest < stop_before:
+                break
+            if url:
+                time.sleep(_PAGE_INTERVAL_SECONDS)
         return episodes
 
     def _get(self, url: str, params: dict[str, str | int] | None) -> dict:
@@ -108,7 +137,10 @@ class SpotifyCatalog:
             if response.status_code != 429:
                 response.raise_for_status()
                 return response.json()
-            time.sleep(int(response.headers.get("Retry-After", "1")))
+            retry_after = int(response.headers.get("Retry-After", "1"))
+            if retry_after > _MAX_RETRY_AFTER_SECONDS:
+                raise SpotifyRateLimited(retry_after)
+            time.sleep(retry_after)
         response.raise_for_status()
         raise AssertionError("unreachable")  # raise_for_status 對 429 一定會拋例外
 

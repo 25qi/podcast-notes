@@ -152,6 +152,7 @@ SCHEMA_FILES = (
     "002_episode_status.sql",
     "003_notes.sql",
     "005_episode_contents.sql",
+    "006_episode_status_spotify_checked_at.sql",
 )
 
 

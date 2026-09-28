@@ -14,7 +14,7 @@ from podcast_notes.config import Settings
 from podcast_notes.db import connect
 from podcast_notes.pipeline.fetch import claim_episodes, sync_sources
 from podcast_notes.sources.podcast import Episode, FeedResult
-from podcast_notes.sources.spotify_catalog import SpotifyEpisode
+from podcast_notes.sources.spotify_catalog import SpotifyEpisode, SpotifyRateLimited
 
 SINCE = datetime(2025, 1, 1, tzinfo=UTC)
 NOW = datetime.now(UTC)
@@ -45,8 +45,10 @@ class FakeCatalog:
         self.episodes = episodes
         self.calls = 0
 
-    def list_show_episodes(self, show_id: str) -> list[SpotifyEpisode]:
+    def list_show_episodes(self, show_id: str, *, stop_before=None) -> list[SpotifyEpisode]:
         self.calls += 1
+        if isinstance(self.episodes, BaseException):
+            raise self.episodes
         return self.episodes
 
 
@@ -203,17 +205,22 @@ def test_redirect_to_url_used_by_another_source_is_not_written(db: Settings) -> 
 
 def _insert(settings: Settings, guid: str, *, show: str = "Show A", published: datetime,
             status: str = "pending", spotify_id: str | None = None, attempts: int = 0,
-            started: datetime | None = None) -> None:
+            started: datetime | None = None, checked: bool | None = None) -> None:
+    """checked：有沒有真的比對過 Spotify。沒指定就看有沒有 spotify_id（比對到一定是比對過）。"""
+    if checked is None:
+        checked = spotify_id is not None
     with connect(settings) as conn:
         conn.execute(
             """
             insert into episode_status
                 (source_id, source_type, source_item_id, show_name, episode_title, published_at,
-                 source_url, status, spotify_episode_id, attempt_count, processing_started_at)
-            select id, 'podcast', %s, name, %s, %s, 'https://x/a.mp3', %s, %s, %s, %s
+                 source_url, status, spotify_episode_id, attempt_count, processing_started_at,
+                 spotify_checked_at)
+            select id, 'podcast', %s, name, %s, %s, 'https://x/a.mp3', %s, %s, %s, %s,
+                   case when %s then now() end
             from tracked_sources where name = %s
             """,
-            (guid, guid, published, status, spotify_id, attempts, started, show),
+            (guid, guid, published, status, spotify_id, attempts, started, checked, show),
         )
 
 
@@ -245,8 +252,10 @@ def test_claim_rules(db: Settings) -> None:
             started=NOW - timedelta(minutes=30))
     _insert(db, "done", published=old, spotify_id="5" * 22, status="completed")
     # 走 Spotify 的節目、還沒比對到：未滿 24 小時先等，超過就放行（之後退回音檔）
-    _insert(db, "fresh-unmatched", published=NOW - timedelta(hours=2))
-    _insert(db, "old-unmatched", published=NOW - timedelta(hours=25))
+    _insert(db, "fresh-unmatched", published=NOW - timedelta(hours=2), checked=True)
+    _insert(db, "old-unmatched", published=NOW - timedelta(hours=25), checked=True)
+    # 還沒真的比對過（例如被 Spotify 限流）：再舊也不撿，不然會被誤改用音檔
+    _insert(db, "old-never-checked", published=NOW - timedelta(days=300), checked=False)
     _insert(db, "fresh-matched", published=NOW - timedelta(hours=2), spotify_id="6" * 22)
     # 不走 Spotify 的節目，不用等
     _insert(db, "fresh-no-spotify", show="Show B", published=NOW - timedelta(hours=2))
@@ -267,3 +276,35 @@ def test_claim_limit_and_order(db: Settings) -> None:
 def test_backfill_since_default_matches_config() -> None:
     """SINCE 常數跟設定檔的回填起點一致，避免測試跟實際行為對不上。"""
     assert Settings.model_fields["backfill_since"].default == date(2025, 1, 1)
+
+
+def test_spotify_rate_limit_keeps_rss_rows_and_stops_matching(db: Settings) -> None:
+    """Spotify 限流：RSS 新集數照樣寫入；沒比對到的集數不會被標成「比對過」，
+    也就不會被誤改用音檔。"""
+    feeds = FakeFeeds({
+        FEED_A: _feed(_ep("a1", "Old one", datetime(2025, 3, 1, tzinfo=UTC))),
+        FEED_B: _feed(),
+    })
+    catalog = FakeCatalog(SpotifyRateLimited(15078))
+
+    with connect(db) as conn:
+        report = sync_sources(conn, catalog=catalog, since=SINCE, feed_fetcher=feeds)
+
+    assert report.inserted["Show A"] == 1
+    assert "15078" in report.errors["Show A"]
+    row = _rows(db)[0]
+    assert row["spotify_episode_id"] is None
+    assert row["spotify_checked_at"] is None
+    assert _claim(db) == []
+
+
+def test_checked_but_not_found_is_marked(db: Settings) -> None:
+    """比對跑完但 Spotify 上找不到：記下 spotify_checked_at，過了等待期就放行（改用音檔）。"""
+    feeds = FakeFeeds({
+        FEED_A: _feed(_ep("a1", "Only on RSS", datetime(2025, 3, 1, tzinfo=UTC))),
+        FEED_B: _feed(),
+    })
+    with connect(db) as conn:
+        sync_sources(conn, catalog=FakeCatalog([]), since=SINCE, feed_fetcher=feeds)
+    assert _rows(db)[0]["spotify_checked_at"] is not None
+    assert _claim(db) == ["a1"]
